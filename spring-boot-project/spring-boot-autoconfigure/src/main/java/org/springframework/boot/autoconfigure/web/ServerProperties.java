@@ -100,6 +100,11 @@ public class ServerProperties {
 	 */
 	private DataSize maxHttpHeaderSize = DataSize.ofKilobytes(8);
 
+	/**
+	 * Type of shutdown that the server will support.
+	 */
+	private Shutdown shutdown = Shutdown.IMMEDIATE;
+
 	@NestedConfigurationProperty
 	private Ssl ssl;
 
@@ -108,9 +113,6 @@ public class ServerProperties {
 
 	@NestedConfigurationProperty
 	private final Http2 http2 = new Http2();
-
-	@NestedConfigurationProperty
-	private final Shutdown shutdown = new Shutdown();
 
 	private final Servlet servlet = new Servlet();
 
@@ -154,6 +156,14 @@ public class ServerProperties {
 		this.maxHttpHeaderSize = maxHttpHeaderSize;
 	}
 
+	public Shutdown getShutdown() {
+		return this.shutdown;
+	}
+
+	public void setShutdown(Shutdown shutdown) {
+		this.shutdown = shutdown;
+	}
+
 	public ErrorProperties getError() {
 		return this.error;
 	}
@@ -172,10 +182,6 @@ public class ServerProperties {
 
 	public Http2 getHttp2() {
 		return this.http2;
-	}
-
-	public Shutdown getShutdown() {
-		return this.shutdown;
 	}
 
 	public Servlet getServlet() {
@@ -532,7 +538,12 @@ public class ServerProperties {
 			this.redirectContextRoot = redirectContextRoot;
 		}
 
-		public boolean getUseRelativeRedirects() {
+		@Deprecated
+		public Boolean getUseRelativeRedirects() {
+			return this.useRelativeRedirects;
+		}
+
+		public boolean isUseRelativeRedirects() {
 			return this.useRelativeRedirects;
 		}
 
@@ -1385,12 +1396,77 @@ public class ServerProperties {
 		 */
 		private Duration connectionTimeout;
 
+		/**
+		 * Maximum content length of an H2C upgrade request.
+		 */
+		private DataSize h2cMaxContentLength = DataSize.ofBytes(0);
+
+		/**
+		 * Initial buffer size for HTTP request decoding.
+		 */
+		private DataSize initialBufferSize = DataSize.ofBytes(128);
+
+		/**
+		 * Maximum chunk size that can be decoded for an HTTP request.
+		 */
+		private DataSize maxChunkSize = DataSize.ofKilobytes(8);
+
+		/**
+		 * Maximum length that can be decoded for an HTTP request's initial line.
+		 */
+		private DataSize maxInitialLineLength = DataSize.ofKilobytes(4);
+
+		/**
+		 * Whether to validate headers when decoding requests.
+		 */
+		private boolean validateHeaders = true;
+
 		public Duration getConnectionTimeout() {
 			return this.connectionTimeout;
 		}
 
 		public void setConnectionTimeout(Duration connectionTimeout) {
 			this.connectionTimeout = connectionTimeout;
+		}
+
+		public DataSize getH2cMaxContentLength() {
+			return this.h2cMaxContentLength;
+		}
+
+		public void setH2cMaxContentLength(DataSize h2cMaxContentLength) {
+			this.h2cMaxContentLength = h2cMaxContentLength;
+		}
+
+		public DataSize getInitialBufferSize() {
+			return this.initialBufferSize;
+		}
+
+		public void setInitialBufferSize(DataSize initialBufferSize) {
+			this.initialBufferSize = initialBufferSize;
+		}
+
+		public DataSize getMaxChunkSize() {
+			return this.maxChunkSize;
+		}
+
+		public void setMaxChunkSize(DataSize maxChunkSize) {
+			this.maxChunkSize = maxChunkSize;
+		}
+
+		public DataSize getMaxInitialLineLength() {
+			return this.maxInitialLineLength;
+		}
+
+		public void setMaxInitialLineLength(DataSize maxInitialLineLength) {
+			this.maxInitialLineLength = maxInitialLineLength;
+		}
+
+		public boolean isValidateHeaders() {
+			return this.validateHeaders;
+		}
+
+		public void setValidateHeaders(boolean validateHeaders) {
+			this.validateHeaders = validateHeaders;
 		}
 
 	}

@@ -20,6 +20,8 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+import groovy.lang.Closure;
+import org.gradle.api.Action;
 import org.gradle.api.DefaultTask;
 import org.gradle.api.JavaVersion;
 import org.gradle.api.Project;
@@ -27,13 +29,16 @@ import org.gradle.api.Task;
 import org.gradle.api.file.RegularFileProperty;
 import org.gradle.api.provider.Property;
 import org.gradle.api.tasks.Input;
+import org.gradle.api.tasks.Nested;
 import org.gradle.api.tasks.Optional;
 import org.gradle.api.tasks.TaskAction;
 import org.gradle.api.tasks.options.Option;
+import org.gradle.util.ConfigureUtil;
 
 import org.springframework.boot.buildpack.platform.build.BuildRequest;
 import org.springframework.boot.buildpack.platform.build.Builder;
 import org.springframework.boot.buildpack.platform.build.Creator;
+import org.springframework.boot.buildpack.platform.build.PullPolicy;
 import org.springframework.boot.buildpack.platform.docker.transport.DockerEngineException;
 import org.springframework.boot.buildpack.platform.docker.type.ImageName;
 import org.springframework.boot.buildpack.platform.docker.type.ImageReference;
@@ -51,7 +56,7 @@ import org.springframework.util.StringUtils;
  */
 public class BootBuildImage extends DefaultTask {
 
-	private static final String OPENJDK_BUILDPACK_JAVA_VERSION_KEY = "BP_JAVA_VERSION";
+	private static final String BUILDPACK_JVM_VERSION_KEY = "BP_JVM_VERSION";
 
 	private RegularFileProperty jar;
 
@@ -61,11 +66,17 @@ public class BootBuildImage extends DefaultTask {
 
 	private String builder;
 
+	private String runImage;
+
 	private Map<String, String> environment = new HashMap<>();
 
 	private boolean cleanCache;
 
 	private boolean verboseLogging;
+
+	private PullPolicy pullPolicy;
+
+	private DockerSpec docker = new DockerSpec();
 
 	public BootBuildImage() {
 		this.jar = getProject().getObjects().fileProperty();
@@ -131,6 +142,26 @@ public class BootBuildImage extends DefaultTask {
 	@Option(option = "builder", description = "The name of the builder image to use")
 	public void setBuilder(String builder) {
 		this.builder = builder;
+	}
+
+	/**
+	 * Returns the run image that will be included in the built image. When {@code null},
+	 * the run image bundled with the builder will be used.
+	 * @return the run image
+	 */
+	@Input
+	@Optional
+	public String getRunImage() {
+		return this.runImage;
+	}
+
+	/**
+	 * Sets the run image that will be included in the built image.
+	 * @param runImage the run image
+	 */
+	@Option(option = "runImage", description = "The name of the run image to use")
+	public void setRunImage(String runImage) {
+		this.runImage = runImage;
 	}
 
 	/**
@@ -202,9 +233,56 @@ public class BootBuildImage extends DefaultTask {
 		this.verboseLogging = verboseLogging;
 	}
 
+	/**
+	 * Returns image pull policy that will be used when building the image.
+	 * @return whether images should be pulled
+	 */
+	@Input
+	@Optional
+	public PullPolicy getPullPolicy() {
+		return this.pullPolicy;
+	}
+
+	/**
+	 * Sets image pull policy that will be used when building the image.
+	 * @param pullPolicy image pull policy {@link PullPolicy}
+	 */
+	@Option(option = "pullPolicy", description = "The image pull policy")
+	public void setPullPolicy(PullPolicy pullPolicy) {
+		this.pullPolicy = pullPolicy;
+	}
+
+	/**
+	 * Returns the Docker configuration the builder will use.
+	 * @return docker configuration.
+	 * @since 2.4.0
+	 */
+	@Nested
+	public DockerSpec getDocker() {
+		return this.docker;
+	}
+
+	/**
+	 * Configures the Docker connection using the given {@code action}.
+	 * @param action the action to apply
+	 * @since 2.4.0
+	 */
+	public void docker(Action<DockerSpec> action) {
+		action.execute(this.docker);
+	}
+
+	/**
+	 * Configures the Docker connection using the given {@code closure}.
+	 * @param closure the closure to apply
+	 * @since 2.4.0
+	 */
+	public void docker(Closure<?> closure) {
+		docker(ConfigureUtil.configureUsing(closure));
+	}
+
 	@TaskAction
 	void buildImage() throws DockerEngineException, IOException {
-		Builder builder = new Builder();
+		Builder builder = new Builder(this.docker.asDockerConfiguration());
 		BuildRequest request = createRequest();
 		builder.build(request);
 	}
@@ -228,10 +306,12 @@ public class BootBuildImage extends DefaultTask {
 
 	private BuildRequest customize(BuildRequest request) {
 		request = customizeBuilder(request);
+		request = customizeRunImage(request);
 		request = customizeEnvironment(request);
 		request = customizeCreator(request);
 		request = request.withCleanCache(this.cleanCache);
 		request = request.withVerboseLogging(this.verboseLogging);
+		request = customizePullPolicy(request);
 		return request;
 	}
 
@@ -242,12 +322,19 @@ public class BootBuildImage extends DefaultTask {
 		return request;
 	}
 
+	private BuildRequest customizeRunImage(BuildRequest request) {
+		if (StringUtils.hasText(this.runImage)) {
+			return request.withRunImage(ImageReference.of(this.runImage));
+		}
+		return request;
+	}
+
 	private BuildRequest customizeEnvironment(BuildRequest request) {
 		if (this.environment != null && !this.environment.isEmpty()) {
 			request = request.withEnv(this.environment);
 		}
-		if (this.targetJavaVersion.isPresent() && !request.getEnv().containsKey(OPENJDK_BUILDPACK_JAVA_VERSION_KEY)) {
-			request = request.withEnv(OPENJDK_BUILDPACK_JAVA_VERSION_KEY, translateTargetJavaVersion());
+		if (this.targetJavaVersion.isPresent() && !request.getEnv().containsKey(BUILDPACK_JVM_VERSION_KEY)) {
+			request = request.withEnv(BUILDPACK_JVM_VERSION_KEY, translateTargetJavaVersion());
 		}
 		return request;
 	}
@@ -256,6 +343,13 @@ public class BootBuildImage extends DefaultTask {
 		String springBootVersion = VersionExtractor.forClass(BootBuildImage.class);
 		if (StringUtils.hasText(springBootVersion)) {
 			return request.withCreator(Creator.withVersion(springBootVersion));
+		}
+		return request;
+	}
+
+	private BuildRequest customizePullPolicy(BuildRequest request) {
+		if (this.pullPolicy != null) {
+			request = request.withPullPolicy(this.pullPolicy);
 		}
 		return request;
 	}

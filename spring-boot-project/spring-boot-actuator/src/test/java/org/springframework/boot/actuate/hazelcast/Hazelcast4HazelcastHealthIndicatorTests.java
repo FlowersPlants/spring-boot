@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2019 the original author or authors.
+ * Copyright 2012-2020 the original author or authors.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,7 +31,7 @@ import org.springframework.core.io.ClassPathResource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.BDDMockito.when;
+import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -63,7 +63,7 @@ class Hazelcast4HazelcastHealthIndicatorTests {
 	@Test
 	void hazelcastDown() {
 		HazelcastInstance hazelcast = mock(HazelcastInstance.class);
-		when(hazelcast.executeTransaction(any())).thenThrow(new HazelcastException());
+		given(hazelcast.executeTransaction(any())).willThrow(new HazelcastException());
 		Health health = new HazelcastHealthIndicator(hazelcast).health();
 		assertThat(health.getStatus()).isEqualTo(Status.DOWN);
 	}

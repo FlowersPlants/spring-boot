@@ -36,10 +36,12 @@ import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.entity.AbstractHttpEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 
+import org.springframework.boot.buildpack.platform.docker.configuration.DockerRegistryAuthentication;
 import org.springframework.boot.buildpack.platform.io.Content;
 import org.springframework.boot.buildpack.platform.io.IOConsumer;
 import org.springframework.boot.buildpack.platform.json.SharedObjectMapper;
 import org.springframework.util.Assert;
+import org.springframework.util.StringUtils;
 
 /**
  * Abstract base class for {@link HttpTransport} implementations backed by a
@@ -55,11 +57,15 @@ abstract class HttpClientTransport implements HttpTransport {
 
 	private final HttpHost host;
 
-	protected HttpClientTransport(CloseableHttpClient client, HttpHost host) {
+	private final String registryAuthHeader;
+
+	protected HttpClientTransport(CloseableHttpClient client, HttpHost host,
+			DockerRegistryAuthentication authentication) {
 		Assert.notNull(client, "Client must not be null");
 		Assert.notNull(host, "Host must not be null");
 		this.client = client;
 		this.host = host;
+		this.registryAuthHeader = buildRegistryAuthHeader(authentication);
 	}
 
 	/**
@@ -116,6 +122,11 @@ abstract class HttpClientTransport implements HttpTransport {
 		return execute(new HttpDelete(uri));
 	}
 
+	private String buildRegistryAuthHeader(DockerRegistryAuthentication authentication) {
+		String authHeader = (authentication != null) ? authentication.createAuthHeader() : null;
+		return (StringUtils.hasText(authHeader)) ? authHeader : null;
+	}
+
 	private Response execute(HttpEntityEnclosingRequestBase request, String contentType,
 			IOConsumer<OutputStream> writer) {
 		request.setHeader(HttpHeaders.CONTENT_TYPE, contentType);
@@ -125,25 +136,39 @@ abstract class HttpClientTransport implements HttpTransport {
 
 	private Response execute(HttpUriRequest request) {
 		try {
+			if (this.registryAuthHeader != null) {
+				request.addHeader("X-Registry-Auth", this.registryAuthHeader);
+			}
 			CloseableHttpResponse response = this.client.execute(this.host, request);
 			StatusLine statusLine = response.getStatusLine();
 			int statusCode = statusLine.getStatusCode();
 			HttpEntity entity = response.getEntity();
 			if (statusCode >= 400 && statusCode <= 500) {
 				Errors errors = (statusCode != 500) ? getErrorsFromResponse(entity) : null;
+				Message message = getMessageFromResponse(entity);
 				throw new DockerEngineException(this.host.toHostString(), request.getURI(), statusCode,
-						statusLine.getReasonPhrase(), errors);
+						statusLine.getReasonPhrase(), errors, message);
 			}
 			return new HttpClientResponse(response);
 		}
 		catch (IOException ex) {
-			throw new DockerEngineException(this.host.toHostString(), request.getURI(), 500, ex.getMessage(), null);
+			throw new DockerConnectionException(this.host.toHostString(), ex);
 		}
 	}
 
 	private Errors getErrorsFromResponse(HttpEntity entity) {
 		try {
 			return SharedObjectMapper.get().readValue(entity.getContent(), Errors.class);
+		}
+		catch (IOException ex) {
+			return null;
+		}
+	}
+
+	private Message getMessageFromResponse(HttpEntity entity) {
+		try {
+			return (entity.getContent() != null)
+					? SharedObjectMapper.get().readValue(entity.getContent(), Message.class) : null;
 		}
 		catch (IOException ex) {
 			return null;

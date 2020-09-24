@@ -22,6 +22,7 @@ import java.io.InputStream;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 
+import org.apache.http.Header;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpEntityEnclosingRequest;
 import org.apache.http.HttpHeaders;
@@ -37,12 +38,15 @@ import org.apache.http.client.methods.HttpUriRequest;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
 import org.mockito.Mock;
-import org.mockito.MockitoAnnotations;
+import org.mockito.junit.jupiter.MockitoExtension;
 
+import org.springframework.boot.buildpack.platform.docker.configuration.DockerConfiguration;
 import org.springframework.boot.buildpack.platform.docker.transport.HttpTransport.Response;
+import org.springframework.util.Base64Utils;
 import org.springframework.util.StreamUtils;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -58,6 +62,7 @@ import static org.mockito.Mockito.verify;
  * @author Mike Smithson
  * @author Scott Frederick
  */
+@ExtendWith(MockitoExtension.class)
 class HttpClientTransportTests {
 
 	private static final String APPLICATION_JSON = "application/json";
@@ -89,16 +94,13 @@ class HttpClientTransportTests {
 
 	@BeforeEach
 	void setup() throws Exception {
-		MockitoAnnotations.initMocks(this);
-		given(this.client.execute(any(HttpHost.class), any(HttpRequest.class))).willReturn(this.response);
-		given(this.response.getEntity()).willReturn(this.entity);
-		given(this.response.getStatusLine()).willReturn(this.statusLine);
 		this.http = new TestHttpClientTransport(this.client);
 		this.uri = new URI("example");
 	}
 
 	@Test
 	void getShouldExecuteHttpGet() throws Exception {
+		givenClientWillReturnResponse();
 		given(this.entity.getContent()).willReturn(this.content);
 		given(this.statusLine.getStatusCode()).willReturn(200);
 		Response response = this.http.get(this.uri);
@@ -112,6 +114,7 @@ class HttpClientTransportTests {
 
 	@Test
 	void postShouldExecuteHttpPost() throws Exception {
+		givenClientWillReturnResponse();
 		given(this.entity.getContent()).willReturn(this.content);
 		given(this.statusLine.getStatusCode()).willReturn(200);
 		Response response = this.http.post(this.uri);
@@ -125,6 +128,7 @@ class HttpClientTransportTests {
 
 	@Test
 	void postWithContentShouldExecuteHttpPost() throws Exception {
+		givenClientWillReturnResponse();
 		given(this.entity.getContent()).willReturn(this.content);
 		given(this.statusLine.getStatusCode()).willReturn(200);
 		Response response = this.http.post(this.uri, APPLICATION_JSON,
@@ -145,6 +149,7 @@ class HttpClientTransportTests {
 
 	@Test
 	void putWithContentShouldExecuteHttpPut() throws Exception {
+		givenClientWillReturnResponse();
 		given(this.entity.getContent()).willReturn(this.content);
 		given(this.statusLine.getStatusCode()).willReturn(200);
 		Response response = this.http.put(this.uri, APPLICATION_JSON,
@@ -165,6 +170,7 @@ class HttpClientTransportTests {
 
 	@Test
 	void deleteShouldExecuteHttpDelete() throws IOException {
+		givenClientWillReturnResponse();
 		given(this.entity.getContent()).willReturn(this.content);
 		given(this.statusLine.getStatusCode()).willReturn(200);
 		Response response = this.http.delete(this.uri);
@@ -178,27 +184,98 @@ class HttpClientTransportTests {
 
 	@Test
 	void executeWhenResponseIsIn400RangeShouldThrowDockerException() throws IOException {
+		givenClientWillReturnResponse();
 		given(this.entity.getContent()).willReturn(getClass().getResourceAsStream("errors.json"));
 		given(this.statusLine.getStatusCode()).willReturn(404);
 		assertThatExceptionOfType(DockerEngineException.class).isThrownBy(() -> this.http.get(this.uri))
-				.satisfies((ex) -> assertThat(ex.getErrors()).hasSize(2));
+				.satisfies((ex) -> {
+					assertThat(ex.getErrors()).hasSize(2);
+					assertThat(ex.getResponseMessage()).isNull();
+				});
 	}
 
 	@Test
-	void executeWhenResponseIsIn500RangeShouldThrowDockerException() {
+	void executeWhenResponseIsIn500RangeWithNoContentShouldThrowDockerException() throws IOException {
+		givenClientWillReturnResponse();
 		given(this.statusLine.getStatusCode()).willReturn(500);
 		assertThatExceptionOfType(DockerEngineException.class).isThrownBy(() -> this.http.get(this.uri))
-				.satisfies((ex) -> assertThat(ex.getErrors()).isNull());
+				.satisfies((ex) -> {
+					assertThat(ex.getErrors()).isNull();
+					assertThat(ex.getResponseMessage()).isNull();
+				});
+	}
+
+	@Test
+	void executeWhenResponseIsIn500RangeWithMessageShouldThrowDockerException() throws IOException {
+		givenClientWillReturnResponse();
+		given(this.entity.getContent()).willReturn(getClass().getResourceAsStream("message.json"));
+		given(this.statusLine.getStatusCode()).willReturn(500);
+		assertThatExceptionOfType(DockerEngineException.class).isThrownBy(() -> this.http.get(this.uri))
+				.satisfies((ex) -> {
+					assertThat(ex.getErrors()).isNull();
+					assertThat(ex.getResponseMessage().getMessage()).contains("test message");
+				});
+	}
+
+	@Test
+	void executeWhenResponseIsIn500RangeWithOtherContentShouldThrowDockerException() throws IOException {
+		givenClientWillReturnResponse();
+		given(this.entity.getContent()).willReturn(this.content);
+		given(this.statusLine.getStatusCode()).willReturn(500);
+		assertThatExceptionOfType(DockerEngineException.class).isThrownBy(() -> this.http.get(this.uri))
+				.satisfies((ex) -> {
+					assertThat(ex.getErrors()).isNull();
+					assertThat(ex.getResponseMessage()).isNull();
+				});
 	}
 
 	@Test
 	void executeWhenClientThrowsIOExceptionRethrowsAsDockerException() throws IOException {
 		given(this.client.execute(any(HttpHost.class), any(HttpRequest.class)))
 				.willThrow(new IOException("test IO exception"));
-		assertThatExceptionOfType(DockerEngineException.class).isThrownBy(() -> this.http.get(this.uri))
-				.satisfies((ex) -> assertThat(ex.getErrors()).isNull()).satisfies(DockerEngineException::getStatusCode)
-				.withMessageContaining("500")
-				.satisfies((ex) -> assertThat(ex.getReasonPhrase()).contains("test IO exception"));
+		assertThatExceptionOfType(DockerConnectionException.class).isThrownBy(() -> this.http.get(this.uri))
+				.satisfies((ex) -> assertThat(ex.getMessage()).contains("test IO exception"));
+	}
+
+	@Test
+	void getWithDockerRegistryUserAuthWillSendAuthHeader() throws IOException {
+		DockerConfiguration dockerConfiguration = new DockerConfiguration().withRegistryUserAuthentication("user",
+				"secret", "https://docker.example.com", "docker@example.com");
+		this.http = new TestHttpClientTransport(this.client, dockerConfiguration);
+		givenClientWillReturnResponse();
+		given(this.entity.getContent()).willReturn(this.content);
+		given(this.statusLine.getStatusCode()).willReturn(200);
+		Response response = this.http.get(this.uri);
+		verify(this.client).execute(this.hostCaptor.capture(), this.requestCaptor.capture());
+		HttpUriRequest request = this.requestCaptor.getValue();
+		assertThat(request).isInstanceOf(HttpGet.class);
+		assertThat(request.getURI()).isEqualTo(this.uri);
+		Header[] registryAuthHeaders = request.getHeaders("X-Registry-Auth");
+		assertThat(registryAuthHeaders).isNotNull();
+		assertThat(new String(Base64Utils.decodeFromString(registryAuthHeaders[0].getValue())))
+				.contains("\"username\" : \"user\"").contains("\"password\" : \"secret\"")
+				.contains("\"email\" : \"docker@example.com\"")
+				.contains("\"serveraddress\" : \"https://docker.example.com\"");
+		assertThat(response.getContent()).isSameAs(this.content);
+	}
+
+	@Test
+	void getWithDockerRegistryTokenAuthWillSendAuthHeader() throws IOException {
+		DockerConfiguration dockerConfiguration = new DockerConfiguration().withRegistryTokenAuthentication("token");
+		this.http = new TestHttpClientTransport(this.client, dockerConfiguration);
+		givenClientWillReturnResponse();
+		given(this.entity.getContent()).willReturn(this.content);
+		given(this.statusLine.getStatusCode()).willReturn(200);
+		Response response = this.http.get(this.uri);
+		verify(this.client).execute(this.hostCaptor.capture(), this.requestCaptor.capture());
+		HttpUriRequest request = this.requestCaptor.getValue();
+		assertThat(request).isInstanceOf(HttpGet.class);
+		assertThat(request.getURI()).isEqualTo(this.uri);
+		Header[] registryAuthHeaders = request.getHeaders("X-Registry-Auth");
+		assertThat(registryAuthHeaders).isNotNull();
+		assertThat(new String(Base64Utils.decodeFromString(registryAuthHeaders[0].getValue())))
+				.contains("\"identitytoken\" : \"token\"");
+		assertThat(response.getContent()).isSameAs(this.content);
 	}
 
 	private String writeToString(HttpEntity entity) throws IOException {
@@ -207,13 +284,23 @@ class HttpClientTransportTests {
 		return new String(out.toByteArray(), StandardCharsets.UTF_8);
 	}
 
+	private void givenClientWillReturnResponse() throws IOException {
+		given(this.client.execute(any(HttpHost.class), any(HttpRequest.class))).willReturn(this.response);
+		given(this.response.getEntity()).willReturn(this.entity);
+		given(this.response.getStatusLine()).willReturn(this.statusLine);
+	}
+
 	/**
 	 * Test {@link HttpClientTransport} implementation.
 	 */
 	static class TestHttpClientTransport extends HttpClientTransport {
 
 		protected TestHttpClientTransport(CloseableHttpClient client) {
-			super(client, HttpHost.create("docker://localhost"));
+			super(client, HttpHost.create("docker://localhost"), null);
+		}
+
+		protected TestHttpClientTransport(CloseableHttpClient client, DockerConfiguration dockerConfiguration) {
+			super(client, HttpHost.create("docker://localhost"), dockerConfiguration.getRegistryAuthentication());
 		}
 
 	}
